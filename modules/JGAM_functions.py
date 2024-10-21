@@ -4,29 +4,20 @@ os.environ['OPENCV_IO_MAX_IMAGE_PIXELS'] = pow(2,40).__str__()
 
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import  QPixmap
-from PySide6.QtWidgets import (
-    QMainWindow, QFileSystemModel, QGraphicsScene, QFileDialog
-) 
+from PySide6.QtWidgets import (QMainWindow, QFileSystemModel) 
 
 from .ui_main import Ui_MainWindow
 from .ui_dino_prompt import Ui_DinoPrompt
+from .ui_prompt_model import Ui_promptModel
 from .ui_functions import UIFunctions
-from .ui_brush_menu import Ui_BrushMenu
-from .ui_erase_menu import Ui_EraseMenu
 from .app_settings import Settings
 from .dnn_functions import DNNFunctions
 
 from .utils import *
-from .utils_img import (annotate_GD, 
-                        getScaledPoint, 
-                        getScaledPoint_mmdet, 
-                        getCoordBTWTwoPoints, 
-                        applyBrushSize, 
-                        readImageToPixmap)
+from .utils_img import (annotate_GD)
 from .utils_JGAM import *
 
 from modules.utils import imwrite_colormap
@@ -35,14 +26,28 @@ from submodules.GroundingDINO.groundingdino.util import box_ops
 
 import torch
 
-from collections import Counter
-from skimage.measure import label, regionprops, regionprops_table
-from skimage import data, measure, morphology
+from skimage.measure import label, regionprops
+from skimage import morphology
 
 import copy
 
-from modules.image_functions import ImageFunctions
+class PromptModelWindow(QMainWindow, UIFunctions):
+    def __init__(self):
+        QMainWindow.__init__(self)
 
+        self.ui = Ui_promptModel()
+        self.ui.setupUi(self)
+        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
+
+        self.settings = Settings()
+
+        self.uiDefinitions()
+
+    def resizeEvent(self, event):
+        self.resize_grips()
+
+    def mousePressEvent(self, event):
+        self.dragPos = event.globalPos()
 
 class DinoPromptWindow(QMainWindow, UIFunctions):
     def __init__(self):
@@ -82,54 +87,130 @@ class JGAMFunctions(DNNFunctions):
         """
         Attribute
         """
+        self.TEXT_PROMPT = "Steel joint" 
 
         self.pred_thr = 0.80
         self.area_thr = 250
         self.fill_thr = 250
         
-        mainWidgets.mainImageViewer.mouseMoveEvent = self._mouseMoveEvent
-        mainWidgets.mainImageViewer.mousePressEvent = self._mousePressPoint
-        mainWidgets.mainImageViewer.mouseReleaseEvent = self._mouseReleasePoint
-        
         """
         Experiment
         """
 
-        self.promptVerification = True
+        self.promptVerification = False
         self.promptErosion = False
         
         """
         Pompt Tool
         """
-        mainWidgets.brushButton.clicked.connect(self.openBrushMenu)
 
-        self.BrushMenu = DinoPromptWindow()
-        self.BrushMenu.ui.lineEdit.returnPressed.connect(self.changePrompt)
+        self.use_GD = False
+        self.use_PM = False
+        
+        mainWidgets.GDButton.clicked.connect(self.openGD)
+        mainWidgets.PMButton.clicked.connect(self.openPM)
+
+        # Grounding-DINO
+        self.GD = DinoPromptWindow()
+        ## Enter 키와 "확인" 버튼에 기능을 탑재하라
+        self.GD.ui.lineEdit.returnPressed.connect(self.changePrompt)
+        
+        # Prompt Model (DeeplabV3+)
+        self.PM = PromptModelWindow()
+        self.PM.ui.thrSlider.valueChanged.connect(self.changeThreshold)
+        self.PM.ui.verCheckBox.stateChanged.connect(self.changeThrVerification)
+        
 
         """
         expansion Tool
         """
-        mainWidgets.jgamButton.clicked.connect(self.checkExpansionTools)
+
         self.use_jgam = False
     
-    def set_button_state(self, use_jgam=False):
+        mainWidgets.jgamButton.clicked.connect(self.checkExpansionTools)
+
+    def openGD(self):
+        """
+        Open or Close Grounding DINO Prompt
+        """
+        if self.use_GD == False:
+            self.GD.show()
+            self.use_GD = True
+            # if hasattr(self, 'PM'):
+            #     self.PM.close()  
+            self.set_button_state(use_GD=self.use_GD, use_PM=self.use_PM)
+
+        elif self.use_GD == True:
+            self.GD.close()
+            self.use_GD = False
+            self.set_button_state(use_GD=self.use_GD, use_PM=self.use_PM)
+
+    
+    def openPM(self):
+        """
+        Open or Close Prompt Model Threshold Menu
+        """
+        if self.use_PM == False:
+            self.PM.show()
+            self.use_PM = True
+            # if hasattr(self, 'PM'):
+            #     self.PM.close()  
+            self.set_button_state(use_GD=self.use_GD, use_PM=self.use_PM)
+
+        elif self.use_PM == True:
+            self.PM.close()
+            self.use_PM = False
+            self.set_button_state(use_GD=self.use_GD, use_PM=self.use_PM)
+
+    def changePrompt(self):
+        self.TEXT_PROMPT = self.GD.ui.lineEdit.text()
+
+    def changeThreshold(self, value):
+        self.pred_thr = float(value/100)
+        self.PM.ui.brushSizeText.setText(str(f"{value} %"))
+    
+    def changeThrVerification(self):
+        if self.PM.ui.verCheckBox.isChecked():
+            self.promptVerification = True
+            print(self.promptVerification)
+            
+        if self.PM.ui.verCheckBox.isChecked() == False:
+            self.promptVerification = False
+            print(self.promptVerification)
+        
+    def set_button_state(self,
+                         use_jgam=False,
+                         use_GD=False,
+                         use_PM=False
+                         ):
         """
         Set the state of the buttons
         """
+        
         self.use_jgam = use_jgam
+        self.use_GD = use_GD
+        self.use_PM = use_PM
         
         mainWidgets.jgamButton.setChecked(use_jgam)
+        mainWidgets.GDButton.setChecked(use_GD)
+        mainWidgets.PMButton.setChecked(use_PM)
         
     def checkExpansionTools(self):
         
         ### JGAMS
         if hasattr(self, 'imgPath') :
             ## 1. Grounding DINO
+            self.GD_min_x = []
+            self.GD_min_y = []
+            self.GD_max_x = []
+            self.GD_max_y = []
+
             self.inferenceGroundingDino()
 
-            if hasattr(self, 'GD_min_x') :
+            if self.GD_min_x or self.GD_min_y or self.GD_max_x or self.GD_max_y :
                 ## 2. Create SAM's Prompt
                 self.promptModel(self.promptVerification)
+                
                 ## 2.1 Point Sampling
                 input_point, input_label, input_box = self.pointSampling(self.promptErosion)
                 
@@ -146,10 +227,9 @@ class JGAMFunctions(DNNFunctions):
             ## 4. Measure joint gap
             image = cv2.imread(self.imgPath)
             gap_mask = self.label == 2
-            # gap_mask = np.array(gap_mask, dtype=np.uint8)
             
             mask, image, region_data, all_thicknesses, all_thickness_positions = self.gap_measure(gap_mask, image)
-            print(f"region_data: {region_data}")
+            # print(f"region_data: {region_data}")
 
         else:
             print(f"No image")     
@@ -167,14 +247,14 @@ class JGAMFunctions(DNNFunctions):
         
         GD_img_source, GD_img = imread_GD(self.imgPath)
         
-        TEXT_PROMPT = "Steel joint" 
+        print(f"Grounding DINO status: {self.TEXT_PROMPT}")
+
         BOX_TRESHOLD = 0.25
         TEXT_TRESHOLD = 0.20
 
-
         boxes, logits, phrases = self.inference_groundingDino(model=self.groundingDino_model, 
                                                               image=GD_img,
-                                                              caption=TEXT_PROMPT,
+                                                              caption=self.TEXT_PROMPT,
                                                               box_threshold=BOX_TRESHOLD,
                                                               text_threshold=TEXT_TRESHOLD,
                                                               )
@@ -214,9 +294,11 @@ class JGAMFunctions(DNNFunctions):
         """
         
         if len(np.nonzero(self.label[0])) > 0:
-                self.label = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+            self.label = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+
+        print(f"promptModel status: {verification}, {self.pred_thr}")
                 
-        pred_thrs = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] if verification else [self.pred_thr]
+        pred_thrs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99] if verification else [self.pred_thr]
         
         for thr in pred_thrs:
 
@@ -235,10 +317,10 @@ class JGAMFunctions(DNNFunctions):
             joint_y_idx = joint_y_idx + self.GD_min_y
 
             prompt_label[joint_y_idx, joint_x_idx] = 1
-            if thr == 0.8:
+            
+            if thr == self.pred_thr:
                 self.label[joint_y_idx, joint_x_idx] = 1
-            # self.colormap[joint_y_idx, joint_x_idx, :3] = self.label_palette[1]
-
+            
             # gap
             gap_logit = logits[2, :, :]
             gap_score = min_max_normalize(gap_logit)
@@ -252,10 +334,10 @@ class JGAMFunctions(DNNFunctions):
             gap_y_idx = gap_y_idx + self.GD_min_y
 
             prompt_label[gap_y_idx, gap_x_idx] = 2
-            if thr == 0.8:
+            
+            if thr == self.pred_thr:
                 self.label[gap_y_idx, gap_x_idx] = 2
-            # self.colormap[gap_y_idx, gap_x_idx, :3] = self.label_palette[2]
-
+            
             # visual
             img = img[:, :, :3]
             prompt_colormap = blendImageWithColorMap(img, prompt_label) 
@@ -301,70 +383,50 @@ class JGAMFunctions(DNNFunctions):
             self.load_sam(self.sam_checkpoint) 
 
         img = cvtPixmapToArray(self.pixmap)
-        # img = img[:, :, :3]
-        img_roi = img[self.GD_min_y:self.GD_max_y, self.GD_min_x:self.GD_max_x, :3]
+        img = img[:, :, :3]
+        # img_roi = img[self.GD_min_y:self.GD_max_y, self.GD_min_x:self.GD_max_x, :3]
                 
-        self.sam_predictor.set_image(img_roi)
-        
+        self.sam_predictor.set_image(img)
         
         masks, scores, logits = self.sam_predictor.predict(
             point_coords=input_point,
             point_labels=input_label,
+            box=input_box, 
             multimask_output=True,
         )
 
         mask = masks[np.argmax(scores), :, :]
-        # self.sam_mask_input = logits[np.argmax(scores), :, :]
-
+        
         # update label with result
         idx = np.argwhere(mask == 1)
         y_idx, x_idx = idx[:, 0], idx[:, 1]
 
-        x_idx = x_idx + self.GD_min_x
-        y_idx = y_idx + self.GD_min_y
-
-        self.GD_sam_y_idx = y_idx
-        self.GD_sam_x_idx = x_idx
-        
-        self.label[self.label==1] = 0
-        
-        self.updateColorMap()
-
+        self.label[self.label!=0] = 0
         self.label[y_idx, x_idx] = 2
+
+        self.colormap = convertLabelToColorMap(self.label, self.label_palette, self.alpha)
         self.colormap[y_idx, x_idx, :3] = self.label_palette[2]
 
         imwrite(self.labelPath, self.label)
 
         _colormap = copy.deepcopy(self.colormap)
+        sam_colormap = blendImageWithColorMap(img, self.label)
+        img = imread(self.imgPath)
 
         for joint in self.top6_joint:
-            
-            # cv2.circle(_colormap, (joint[0], joint[1]), 50, (0, 0, 255, 255), 9)
             cv2.circle(_colormap, (joint[0], joint[1]), 9, (0, 0, 255, 255), -1)
-        for gap in self.top6_gap:
-            
-            # cv2.circle(_colormap, (gap[0], gap[1]), 50, (255, 0, 0, 255), 9)
-            cv2.circle(_colormap, (gap[0], gap[1]), 9, (255, 0, 0, 255), -1)
+            cv2.circle(sam_colormap, (joint[0], joint[1]), 9, (255, 0, 0, 255), -1)
+            cv2.circle(img, (joint[0], joint[1]), 9, (255, 0, 0, 255), -1)
         
-
+        for gap in self.top6_gap:
+            cv2.circle(_colormap, (gap[0], gap[1]), 9, (255, 0, 0, 255), -1)
+            cv2.circle(sam_colormap, (gap[0], gap[1]), 9, (0, 0, 255, 255), -1)
+            cv2.circle(img, (gap[0], gap[1]), 9, (0, 0, 255, 255), -1)
 
         self.color_pixmap = QPixmap(cvtArrayToQImage(_colormap))
         self.color_pixmap_item.setPixmap(QPixmap())
         self.color_pixmap_item.setPixmap(self.color_pixmap)
 
-        sam_colormap = blendImageWithColorMap(img, self.label) 
-        img = imread(self.imgPath)
-
-        for joint in self.top6_joint:
-            
-            cv2.circle(sam_colormap, (joint[0], joint[1]), 9, (255, 0, 0, 255), -1)
-            cv2.circle(img, (joint[0], joint[1]), 9, (255, 0, 0, 255), -1)
-        for gap in self.top6_gap:
-            
-            cv2.circle(sam_colormap, (gap[0], gap[1]), 9, (0, 0, 255, 255), -1)
-            cv2.circle(img, (gap[0], gap[1]), 9, (0, 0, 255, 255), -1)
-        
-        
         colormapPath = os.path.dirname(self.labelPath)
         colormapName = os.path.basename(self.labelPath)
         colormapPath = os.path.dirname(colormapPath)
@@ -373,7 +435,7 @@ class JGAMFunctions(DNNFunctions):
         os.makedirs(colormapPath, exist_ok=True)
         colormapPath = os.path.join(colormapPath, colormapName)
 
-        pointName = colormapName.replace("_labelIds.png", "point.png")
+        pointName = colormapName.replace("_labelIds.png", "_point.png")
         pointmapPath = os.path.join(os.path.dirname(colormapPath), pointName)
 
         imwrite_colormap(colormapPath, sam_colormap)
